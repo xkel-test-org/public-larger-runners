@@ -1,0 +1,197 @@
+name: Pac-Man
+# Pac-Man is GitHub Actions workflow that generates usage of all existing metered products.
+# The usage is attributed to the owner of the test repository where Pac-Man is run.
+#
+# Usage
+# 1. Copy pac-man.yml (this file) into folder .github/workflows in your test repository
+#
+# Steps 2 and 3 are required for generating Codespaces and Packages usage. If you need only
+# Actions and Shared Storage usage, you can skip these steps.
+#
+# 2. Create personal access token at https://github.com/settings/tokens with scopes "codespace" and "write:packages. Make sure you select a classic and not a beta token."
+# 3. Save the token as Actions secret "PACMAN_TOKEN" in your test repository
+#
+# Save the token for later. You will be prompted to enter it when executing step 6.
+#
+# 4. Run Pac-Man by clicking the "Run workflow" button in the Actions tab of your test repository 🚀
+#
+# Steps 5 is required only for generating Packages bandwidth usage.
+#
+# 5. Follow the Actions Summary instuctions to download and execute pac-man.sh
+#
+# You can customize Pac-Man by changing the values below.
+on:
+  # Creates "Run workflow" button in the workflow tab
+  workflow_dispatch:
+  # Uncomment if you want Pac-Man to run on push
+  # push:
+  # Uncomment if you want Pac-Man to run on a periodic schedule. This is useful when trying to hit spending limits.
+  # schedule:
+    # - cron: "0 */2 * * *"
+env:
+  # The number of minutes each Action and Codespace should run
+  MINUTES: 30
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+permissions:
+  packages: write
+jobs:
+  set_variables:
+    runs-on: ubuntu-latest
+    outputs:
+      codespaces_machine_names: ${{ steps.codespaces.outputs.machine_names }}
+    steps:
+      # Available machine names can differ for each user/organization. Use API to get the current list.
+      - name: Codespaces
+        id: codespaces
+        # Fails if PACMAN_TOKEN not set / not valid. Codespaces won't be run.
+        continue-on-error: true 
+        run: |
+          response=$(gh api /repos/${{ github.repository }}/codespaces/machines)
+          echo "Available codespaces machine names:"
+          echo $response
+          machine_names=$(echo $response | jq "[.machines | .[] | .name]" -c)
+          echo "::set-output name=machine_names::$machine_names" 
+        env:
+          GITHUB_TOKEN: ${{secrets.PACMAN_TOKEN}}
+  actions:
+    runs-on: ${{ matrix.os }}
+    needs:
+      - set_variables
+    strategy:
+      matrix:
+        os: [
+          # Standard runners. If you need to consume entitlements quicker, list macos-latest multiple times.
+          # ubuntu-latest, windows-latest, macos-latest,
+          
+          # macOS 12-core
+          # macos-13-xl,
+          
+          # macOS 6-core (or sometimes called 8-core). Not generaly available yet. Ask the Actions team to enable for your org.
+          # macos-13-xl-arm64,
+          
+          # Larger runners. You need to manually create matching runners in Org -> Settings -> Actions -> Runners.
+          # The REST API to automate the runner creation is currently in private beta.
+            ubuntu-larger-4,
+          # ubuntu-8, ubuntu-16, ubuntu-32, ubuntu-64,
+          # windows-8, windows-16, windows-32, windows-64,
+
+        ]
+      fail-fast: false
+      # https://docs.github.com/en/actions/learn-github-actions/usage-limits-billing-and-administration#usage-limits
+      max-parallel: 10
+    steps:
+      - name: Generate large artifact
+        shell: pwsh
+        run: |
+          [io.file]::Create("large-artifact.txt").SetLength(1GB).Close
+      - uses: actions/upload-artifact@v3
+        with:
+          name: large-artifact-${{ matrix.os }}.txt
+          path: large-artifact.txt
+      - run: echo "😴 Sleeping for ${{ env.MINUTES }} minute(s) to generate more Actions usage"
+      - run: sleep $((${{ env.MINUTES }} * 60))
+  codespaces:
+    runs-on: ubuntu-latest
+    needs:
+      - set_variables
+    # Empty if PACMAN_TOKEN is not set or invalid
+    if: ${{ needs.set_variables.outputs.codespaces_machine_names != '' }}
+    strategy:
+      matrix:
+        name: ${{ fromJSON(needs.set_variables.outputs.codespaces_machine_names) }}
+      fail-fast: false
+      # Default limit is 5 running codespaces per user. Use 2 here in case the user is currently running codespaces outside Pac-Man.
+      max-parallel: 2
+    steps:
+      - name: Create Codespace
+        id: create
+        # Min --idle-timeout is 5. Otherwise try to use $MINUTES so the codespace does not stop too early.
+        # tail -n1 extracts the last line of gh codespace create output, the codespace name. Text "✓ Codespaces usage for this repository is paid for by" can
+        # be present on the first line.
+        run: |
+          idle_timeout=$(( $MINUTES > 5 ? $MINUTES : 5 ))
+          codespace_name=$(gh codespace create -r ${{ github.repository }} -b main -m ${{ matrix.name }} --idle-timeout ${idle_timeout}m | tail -n1)
+          echo "::set-output name=codespace_name::$codespace_name"
+        env:
+          GITHUB_TOKEN: ${{ secrets.PACMAN_TOKEN }}
+      - run: echo "😴 Sleeping for ${{ env.MINUTES }} minute(s) to generate more Codespaces usage"
+      - run: sleep $((${{ env.MINUTES }} * 60))
+      - run: gh codespace delete -c ${{ steps.create.outputs.codespace_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.PACMAN_TOKEN }}
+  packages:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Package name
+        run: |
+          echo "PACKAGE_NAME=@${REPOSITORY,,}" >>${GITHUB_ENV}
+          echo "PACKAGE_VERSION=1.0.$(date +%s)" >>${GITHUB_ENV}
+        env:
+          REPOSITORY: '${{ github.repository }}'
+      - name: Create package.json
+        shell: pwsh
+        run: |
+          New-Item package.json
+          $Timestamp = Get-Date -UFormat %s -Millisecond 0
+          Set-Content package.json "{`"name`": `"$Env:PACKAGE_NAME`", `"version`": `"$Env:PACKAGE_VERSION`"}" 
+      - uses: actions/setup-node@v2
+        with:
+          node-version: '16.x'
+          registry-url: 'https://npm.pkg.github.com'
+      - run: npm install
+      - run: echo "This package was published by Pac-Man" > README.md
+      # 50 MB
+      - name: Generate large package content
+        run: |
+          for i in {1..50}
+          do
+            base64 /dev/urandom | head -c 1000000 > $i.txt
+          done  
+      - run: npm publish
+        env:
+            NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # 100 x 50 = 0.5 GB
+      - name: Generate pac-man.sh
+        run: |
+          echo "# Copy from here" >> pac-man.sh
+          echo "set -e" >> pac-man.sh
+          echo "echo \"Please enter PACMAN_TOKEN\"" >> pac-man.sh
+          echo "read -s PACMAN_TOKEN" >> pac-man.sh
+          echo "h1=\"Authorization\"" >> pac-man.sh
+          echo "h2=\"Bearer\"" >> pac-man.sh
+          echo "response=\$(curl -H \"\$h1: \$h2 \$PACMAN_TOKEN\" https://npm.pkg.github.com/$PACKAGE_NAME)" >> pac-man.sh
+          echo "echo \$response" >> pac-man.sh
+          echo "if [[ \$response =~ \"error\\\":\" ]]; then" >> pac-man.sh
+          echo "  exit 1" >> pac-man.sh
+          echo "fi" >> pac-man.sh
+          echo "download_url=\$(echo -E \$response | jq \".versions | .[\\\"$PACKAGE_VERSION\\\"] | .dist | .tarball\" -r)" >> pac-man.sh
+          echo "echo \"Package download URL: \$download_url\"" >> pac-man.sh
+          echo "for i in {1..100}" >> pac-man.sh
+          echo "do" >> pac-man.sh
+          echo "  curl -H \"\$h1: \$h2 \$PACMAN_TOKEN\" -L \$download_url --output /tmp/pac-man-package || true" >> pac-man.sh
+          echo "  if grep -q \"error\\\":\" /tmp/pac-man-package; then" >> pac-man.sh
+          echo "    cat /tmp/pac-man-package" >> pac-man.sh
+          echo "    exit 1" >> pac-man.sh
+          echo "  fi" >> pac-man.sh
+          echo "done" >> pac-man.sh
+      - name: Upload pac-man.sh script
+        uses: actions/upload-artifact@v3
+        with:
+          name: pac-man.sh
+          path: pac-man.sh
+      - name: Execution Instructions
+        run: |
+          echo "# pac-man.sh Instructions" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. Download pac-man.sh from the actions artifacts to your computer by clicking on pac-man.sh in the Artifacts section above these instructions" >> $GITHUB_STEP_SUMMARY
+          echo "2. run \`chmod a+x pac-man.sh\`" >> $GITHUB_STEP_SUMMARY
+          echo "3. Execute the script and have a PAT ready that has packages:read permissions (Like the PACMAN_TOKEN PAT)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Alternate Instructions" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. Copy and paste the following script directly to your terminal" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`shell" >> $GITHUB_STEP_SUMMARY
+          cat pac-man.sh >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
