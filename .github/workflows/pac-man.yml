@@ -73,9 +73,9 @@ jobs:
           # Larger runners. You need to manually create matching runners in Org -> Settings -> Actions -> Runners.
           # The REST API to automate the runner creation is currently in private beta.
             ubuntu-larger-4,
+            ubuntu-4,
           # ubuntu-8, ubuntu-16, ubuntu-32, ubuntu-64,
           # windows-8, windows-16, windows-32, windows-64,
-
         ]
       fail-fast: false
       # https://docs.github.com/en/actions/learn-github-actions/usage-limits-billing-and-administration#usage-limits
