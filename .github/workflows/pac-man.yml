@@ -30,7 +30,7 @@ on:
     # - cron: "0 */2 * * *"
 env:
   # The number of minutes each Action and Codespace should run
-  MINUTES: 30
+  MINUTES: 1
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 permissions:
